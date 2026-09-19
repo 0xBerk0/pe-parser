@@ -112,11 +112,9 @@ Understanding the PE format is fundamental to:
 - [x] NT Headers parsing
 - [x] Section enumeration + EntryPoint location
 - [x] Import Table (DLLs + function count)
-- [ ] Export Table
+- [X] Export Table
 - [ ] TLS Callbacks
 - [ ] Base Relocations
-- [ ] Rich Header
-- [ ] Function-level import listing (by name and ordinal)
 - [ ] PE32 (x86) support alongside PE32+
 
 
