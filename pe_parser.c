@@ -1,7 +1,8 @@
 #include <Windows.h>
 #include <stdio.h>
 #include <string.h>
-
+#include <DbgHelp.h>
+#pragma comment(lib, "Imagehlp.lib")
 
 int Error(char *msg) {
     printf("[-] %s : %d\n", msg, GetLastError());
@@ -72,7 +73,15 @@ int main (int argc, char *argv[]) {
     // obtaining NT Headers location , or also called PE Headers, is pretty simply
     // since in the DOS Header we have the e_lfanew, the last number of the DOS Header located at offset 0x3C
     // that contains the offset to the start of the NT Headers
+    IMAGE_DATA_DIRECTORY imageExportDataDirectory = {0};
     PIMAGE_NT_HEADERS pImageNTHeaders = (PIMAGE_NT_HEADERS)((BYTE *)pImageDOSHeader + pImageDOSHeader->e_lfanew);
+    if (pImageNTHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC){
+        PIMAGE_NT_HEADERS64 pImageNTHeaders64 = (PIMAGE_NT_HEADERS64)pImageNTHeaders;
+        imageExportDataDirectory =  pImageNTHeaders64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    }else if(pImageNTHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC){
+        PIMAGE_NT_HEADERS32 pImageNTHeaders32 = (PIMAGE_NT_HEADERS32)pImageNTHeaders;
+        imageExportDataDirectory =  pImageNTHeaders32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    }
 
     printf("| MAGIC NUMBER          : 0x%04X\n", pImageDOSHeader->e_magic);
     printf("| E_LFANEW              : 0x%08X\n", pImageDOSHeader->e_lfanew);
@@ -88,6 +97,46 @@ int main (int argc, char *argv[]) {
     printf("| ENTRY POINT           : 0x%08X\n", pImageNTHeaders->OptionalHeader.AddressOfEntryPoint);
     printf("| SIZE OF IMAGE         : 0x%08X\n", pImageNTHeaders->OptionalHeader.SizeOfImage);
     
+    printf("| EXPORT DIRECTORY SIZE : %d\n", imageExportDataDirectory.Size);
+    printf("| EXPORT DIRECTORY RVA  : 0x%08X\n", imageExportDataDirectory.VirtualAddress);
+    
+    if (imageExportDataDirectory.VirtualAddress == 0 || imageExportDataDirectory.Size == 0){
+        printf("| [!] No exports\n");
+    
+    }else {
+        PIMAGE_EXPORT_DIRECTORY pImageExportDir = (PIMAGE_EXPORT_DIRECTORY)ImageRvaToVa(pImageNTHeaders, lpFileBuffer, imageExportDataDirectory.VirtualAddress, NULL);
+        if (!pImageExportDir) {
+            printf("[!] Failed to map export directory\n");
+        } else {
+            char *dllName = (char *)ImageRvaToVa(pImageNTHeaders, lpFileBuffer, pImageExportDir->Name, NULL);
+            printf("| DLL NAME       : %s\n", dllName);
+            printf("| ORDINAL BASE   : %d\n", pImageExportDir->Base);
+            printf("| # FUNCTIONS    : %d\n", pImageExportDir->NumberOfFunctions);
+            printf("| # NAMES        : %d\n", pImageExportDir->NumberOfNames);
+
+            DWORD* pFunctions = (DWORD*)ImageRvaToVa(pImageNTHeaders, lpFileBuffer, pImageExportDir->AddressOfFunctions, NULL);
+            DWORD* pNames     = (DWORD*)ImageRvaToVa(pImageNTHeaders, lpFileBuffer, pImageExportDir->AddressOfNames, NULL);
+            WORD*  pOrdinals  = (WORD*) ImageRvaToVa(pImageNTHeaders, lpFileBuffer, pImageExportDir->AddressOfNameOrdinals, NULL);
+            
+            for (DWORD i = 0; i < pImageExportDir->NumberOfNames; i++) {
+                char* funcName = (char*)ImageRvaToVa(pImageNTHeaders, lpFileBuffer, pNames[i], NULL);
+                WORD  idx      = pOrdinals[i];
+                DWORD funcRva  = pFunctions[idx];
+                DWORD ordinal  = pImageExportDir->Base + idx;
+
+                if (funcRva >= imageExportDataDirectory.VirtualAddress &&
+                    funcRva <  imageExportDataDirectory.VirtualAddress + imageExportDataDirectory.Size) {
+                    char* fwd = (char*)ImageRvaToVa(pImageNTHeaders, lpFileBuffer, funcRva, NULL);
+                    printf("| [%4d] %-40s -> FORWARD: %s\n", ordinal, funcName, fwd);
+                } else {
+                    printf("| [%4d] %-40s @ RVA 0x%08X\n", ordinal, funcName, funcRva);
+                }
+            }
+        }
+    
+    }   
+
+
     VirtualFree(lpFileBuffer, 0, MEM_RELEASE);
     return 0;
     
